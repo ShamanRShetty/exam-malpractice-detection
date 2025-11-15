@@ -1,0 +1,27 @@
+# Virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment variables
+.env
+
+# Model weights
+*.pt
+*.pth
+
+# Logs & generated data
+data/logs/
+data/snapshots/
+data/evidence_clips/
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS files
+*.DS_Store
+Thumbs.db

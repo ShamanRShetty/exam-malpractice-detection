@@ -1,0 +1,56 @@
+# Core ML/CV Libraries
+opencv-python==4.8.1.78
+opencv-contrib-python==4.8.1.78
+numpy==1.24.3
+scipy==1.11.4
+
+# YOLO Object Detection
+ultralytics==8.0.196
+torch==2.0.1
+torchvision==0.15.2
+
+# MediaPipe for Pose Detection
+mediapipe==0.10.8
+
+# Audio Processing
+pyaudio==0.2.14
+sounddevice==0.4.6
+librosa==0.10.1
+scipy==1.11.4
+
+# Web Framework & Dashboard
+flask==3.0.0
+flask-cors==4.0.0
+flask-socketio==5.3.5
+python-socketio==5.10.0
+
+# Data Processing
+pandas==2.1.3
+scikit-learn==1.3.2
+
+# Utilities
+Pillow==10.1.0
+requests==2.31.0
+python-dotenv==1.0.0
+
+# Video Processing
+moviepy==1.0.3
+imageio==2.33.0
+imageio-ffmpeg==0.4.9
+
+# Background Subtraction & Advanced CV
+scikit-image==0.22.0
+
+# Person Re-Identification (Optional - lightweight version)
+faiss-cpu==1.7.4
+
+# Logging & Monitoring
+colorlog==6.8.0
+tqdm==4.66.1
+
+# Notifications
+plyer==2.1.0  # For desktop notifications on Windows
+
+# Additional utilities
+python-dateutil==2.8.2
+pytz==2023.3
