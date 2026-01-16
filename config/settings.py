@@ -276,7 +276,7 @@ ALERT_SETTINGS = {
 # PRIVACY SETTINGS
 # ============================================================================
 PRIVACY_SETTINGS = {
-    'enable_face_blur': False,  # Set to True for privacy mode
+    'enable_face_blur': True,  # Set to True for privacy mode
     'blur_strength': 25,
     'show_bounding_boxes': True,
     'anonymize_logs': False,
@@ -297,7 +297,7 @@ PERFORMANCE_SETTINGS = {
 # LOGGING SETTINGS
 # ============================================================================
 LOGGING_SETTINGS = {
-    'level': 'INFO',  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+    'level': 'DEBUG',  # DEBUG, INFO, WARNING, ERROR, CRITICAL
     'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     'file': str(LOGS_DIR / 'system.log'),
     'max_bytes': 10 * 1024 * 1024,  # 10 MB

@@ -52,6 +52,8 @@ class AnomalyDetector:
         
         # Apply Gaussian blur to reduce noise
         self.baseline_gray = cv2.GaussianBlur(self.baseline_gray, (5, 5), 0)
+
+        
         
         # Save baseline
         self._save_baseline()
@@ -108,6 +110,10 @@ class AnomalyDetector:
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Resize gray to match baseline size if needed
+        if gray.shape != self.baseline_gray.shape:
+            gray = cv2.resize(gray, (self.baseline_gray.shape[1], self.baseline_gray.shape[0]))
         
         # Calculate difference
         diff = cv2.absdiff(self.baseline_gray, gray)

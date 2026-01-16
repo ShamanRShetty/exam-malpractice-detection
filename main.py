@@ -90,8 +90,12 @@ class ExamMalpracticeDetector:
         # Start video capture
         self.video_capture.start()
         
-        # Wait for baseline setup
-        time.sleep(2)
+        # Create window with proper flags
+        cv2.namedWindow('Exam Malpractice Detection System', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('Exam Malpractice Detection System', 1280, 720)
+        
+        # Wait for camera to initialize
+        time.sleep(1)
         
         # Main processing loop
         try:
@@ -130,6 +134,20 @@ class ExamMalpracticeDetector:
             
             # Skip frames for performance (process every Nth frame)
             if self.frame_count % PERFORMANCE_SETTINGS['frame_skip'] != 0:
+                # Still display the frame even if we don't process it
+                display_frame = frame.copy()
+                self._draw_info_panel(display_frame)
+                cv2.imshow('Exam Malpractice Detection System', display_frame)
+                
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                elif key == ord('b'):
+                    self._setup_baseline(frame)
+                elif key == ord('r'):
+                    self._reset_system()
+                elif key == ord('s'):
+                    self._save_snapshot(display_frame)
                 continue
             
             # Process frame
@@ -210,11 +228,9 @@ class ExamMalpracticeDetector:
             else:
                 prohibited_items = {'phones': [], 'books': [], 'papers': [], 'total': 0}
             
-            # Detect anomalies
+            # Detect anomalies on full frame, not person region
             if self.baseline_set:
-                anomaly_results = self.anomaly_detector.detect_anomalies(
-                    person_region if person_region.size > 0 else frame
-                )
+                anomaly_results = self.anomaly_detector.detect_anomalies(frame)
                 anomalies = anomaly_results['anomalies']
             else:
                 anomalies = []
