@@ -1,5 +1,5 @@
 """
-Video processing utilities
+Video processing utilities - FIXED VERSION
 """
 import cv2
 import numpy as np
@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 
 class VideoCapture:
-    """Threaded video capture for better performance"""
+    """Threaded video capture for better performance - FIXED"""
     
     def __init__(self, source=0, buffer_size=128):
         """
@@ -28,6 +28,9 @@ class VideoCapture:
         if not self.cap.isOpened():
             raise ValueError(f"Unable to open video source: {source}")
         
+        # Set buffer size to reduce latency
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+        
         # Get video properties
         self.fps = int(self.cap.get(cv2.CAP_PROP_FPS)) or 30
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -40,8 +43,8 @@ class VideoCapture:
         # Threading
         self.thread = None
         self.stopped = False
-        self.grabbed = False
         self.frame = None
+        self.frame_ready = False
         
         logger.info(f"Video source initialized: {source} ({self.width}x{self.height} @ {self.fps}fps)")
     
@@ -51,25 +54,55 @@ class VideoCapture:
             self.stopped = False
             self.thread = Thread(target=self._update, daemon=True)
             self.thread.start()
-            logger.info("Video capture thread started")
+            
+            # Wait for first frame
+            timeout = 5  # seconds
+            start_time = time.time()
+            while not self.frame_ready and (time.time() - start_time) < timeout:
+                time.sleep(0.1)
+            
+            if not self.frame_ready:
+                logger.warning("No frame received within timeout")
+            else:
+                logger.info("Video capture thread started successfully")
         return self
     
     def _update(self):
-        """Continuously read frames in background thread"""
+        """Continuously read frames in background thread - FIXED"""
+        consecutive_failures = 0
+        max_failures = 30  # Max consecutive failures before giving up
+        
         while not self.stopped:
-            if not self.grabbed:
-                self.grabbed, self.frame = self.cap.read()
-                if self.grabbed:
+            try:
+                ret, frame = self.cap.read()
+                
+                if ret and frame is not None:
+                    consecutive_failures = 0
                     with self.lock:
-                        self.buffer.append(self.frame.copy())
-            else:
-                time.sleep(0.001)  # Prevent CPU overuse
+                        self.frame = frame.copy()
+                        self.frame_ready = True
+                        self.buffer.append(frame.copy())
+                else:
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_failures:
+                        logger.error("Too many consecutive frame read failures")
+                        self.stopped = True
+                        break
+                    time.sleep(0.01)
+                    
+            except Exception as e:
+                logger.error(f"Error reading frame: {e}")
+                consecutive_failures += 1
+                if consecutive_failures >= max_failures:
+                    self.stopped = True
+                    break
+                time.sleep(0.1)
     
     def read(self):
         """Read the latest frame"""
         with self.lock:
-            if len(self.buffer) > 0:
-                return True, self.buffer[-1]
+            if self.frame_ready and self.frame is not None:
+                return True, self.frame.copy()
         return False, None
     
     def get_buffer(self):
@@ -77,11 +110,15 @@ class VideoCapture:
         with self.lock:
             return list(self.buffer)
     
+    def is_opened(self):
+        """Check if capture is still open"""
+        return not self.stopped and self.cap.isOpened()
+    
     def stop(self):
         """Stop video capture"""
         self.stopped = True
         if self.thread is not None:
-            self.thread.join()
+            self.thread.join(timeout=2.0)
         if self.cap is not None:
             self.cap.release()
         logger.info("Video capture stopped")
