@@ -1,5 +1,5 @@
 """
-Anomaly detection using baseline comparison and background subtraction
+Fixed Anomaly detection using baseline comparison and background subtraction
 """
 import cv2
 import numpy as np
@@ -23,6 +23,7 @@ class AnomalyDetector:
         self.baseline_frame = None
         self.baseline_path = baseline_path or BASELINE_DIR / "baseline.jpg"
         self.baseline_gray = None
+        self.baseline_shape = None  # Store baseline shape
         
         # Background subtractor
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
@@ -48,17 +49,16 @@ class AnomalyDetector:
             frame: Reference frame (clean desk)
         """
         self.baseline_frame = frame.copy()
+        self.baseline_shape = frame.shape  # Store original shape
         self.baseline_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
         # Apply Gaussian blur to reduce noise
         self.baseline_gray = cv2.GaussianBlur(self.baseline_gray, (5, 5), 0)
-
-        
         
         # Save baseline
         self._save_baseline()
         
-        logger.info("Baseline frame set")
+        logger.info(f"Baseline frame set: {self.baseline_shape}")
     
     def detect_anomalies(self, frame, method='difference'):
         """
@@ -111,7 +111,7 @@ class AnomalyDetector:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Resize gray to match baseline size if needed
+        # FIXED: Resize current frame to match baseline size
         if gray.shape != self.baseline_gray.shape:
             gray = cv2.resize(gray, (self.baseline_gray.shape[1], self.baseline_gray.shape[0]))
         
@@ -130,15 +130,27 @@ class AnomalyDetector:
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         anomalies = []
+        
+        # Scale factor for coordinates if frame was resized
+        scale_x = frame.shape[1] / self.baseline_gray.shape[1]
+        scale_y = frame.shape[0] / self.baseline_gray.shape[0]
+        
         for contour in contours:
             area = cv2.contourArea(contour)
             if area > self.min_contour_area:
                 x, y, w, h = cv2.boundingRect(contour)
+                
+                # Scale coordinates back to original frame size
+                x1 = int(x * scale_x)
+                y1 = int(y * scale_y)
+                x2 = int((x + w) * scale_x)
+                y2 = int((y + h) * scale_y)
+                
                 anomalies.append({
-                    'bbox': [x, y, x+w, y+h],
+                    'bbox': [x1, y1, x2, y2],
                     'area': area,
                     'type': 'difference',
-                    'confidence': min(area / 10000, 1.0)  # Normalized confidence
+                    'confidence': min(area / 10000, 1.0)
                 })
         
         return anomalies
@@ -275,6 +287,11 @@ class AnomalyDetector:
         
         for anom in anomalies:
             x1, y1, x2, y2 = map(int, anom['bbox'])
+            # Ensure coordinates are within bounds
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(frame_shape[1], x2)
+            y2 = min(frame_shape[0], y2)
             cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
         
         return mask
@@ -324,6 +341,7 @@ class AnomalyDetector:
         if Path(self.baseline_path).exists():
             self.baseline_frame = cv2.imread(str(self.baseline_path))
             if self.baseline_frame is not None:
+                self.baseline_shape = self.baseline_frame.shape
                 self.baseline_gray = cv2.cvtColor(self.baseline_frame, cv2.COLOR_BGR2GRAY)
                 self.baseline_gray = cv2.GaussianBlur(self.baseline_gray, (5, 5), 0)
                 logger.info(f"Baseline loaded: {self.baseline_path}")
@@ -332,6 +350,7 @@ class AnomalyDetector:
         """Reset the detector"""
         self.baseline_frame = None
         self.baseline_gray = None
+        self.baseline_shape = None
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
             history=ANOMALY_SETTINGS['background_subtractor_history'],
             varThreshold=ANOMALY_SETTINGS['background_subtractor_threshold'],

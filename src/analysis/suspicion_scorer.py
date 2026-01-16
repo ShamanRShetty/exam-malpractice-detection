@@ -1,8 +1,9 @@
 """
-Dynamic suspicion scoring system with decay
+Dynamic suspicion scoring system with decay - FIXED VERSION
+Replace your src/analysis/suspicion_scorer.py with this
 """
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from utils.logger import get_logger
 from config.settings import SUSPICION_SETTINGS
 
@@ -14,10 +15,14 @@ class SuspicionScorer:
     
     def __init__(self):
         """Initialize suspicion scorer"""
-        self.scores = defaultdict(float)  # person_id -> score
-        self.last_update = defaultdict(float)  # person_id -> timestamp
-        self.violation_history = defaultdict(list)  # person_id -> list of violations
-        self.alert_status = defaultdict(str)  # person_id -> alert level
+        self.scores = defaultdict(float)
+        self.last_update = defaultdict(float)
+        self.violation_history = defaultdict(list)
+        self.alert_status = defaultdict(str)
+        
+        # Track recent violations to prevent spam
+        self.recent_violations = defaultdict(lambda: deque(maxlen=10))
+        self.violation_cooldown = defaultdict(float)  # Last time violation added
         
         # Score settings
         self.max_score = SUSPICION_SETTINGS['max_score']
@@ -29,11 +34,20 @@ class SuspicionScorer:
         self.alert_threshold = SUSPICION_SETTINGS['alert_threshold']
         self.high_alert_threshold = SUSPICION_SETTINGS['high_alert_threshold']
         
-        logger.info("Suspicion scorer initialized")
+        # ANTI-SPAM: Minimum time between same violation type (seconds)
+        self.violation_cooldown_time = {
+            'desk_anomaly': 2.0,        # Max once per 2 seconds
+            'hand_below_desk': 3.0,     # Max once per 3 seconds
+            'body_leaning': 3.0,        # Max once per 3 seconds
+            'head_turn_suspicious': 2.0,
+            'looking_down_extended': 2.0,
+        }
+        
+        logger.info("Suspicion scorer initialized with anti-spam protection")
     
     def add_violation(self, person_id, violation_type, timestamp=None, metadata=None):
         """
-        Add a violation and update suspicion score
+        Add a violation and update suspicion score (with cooldown check)
         
         Args:
             person_id: Person identifier
@@ -43,6 +57,19 @@ class SuspicionScorer:
         """
         if timestamp is None:
             timestamp = time.time()
+        
+        # CHECK COOLDOWN - Prevent spam
+        cooldown_key = f"{person_id}_{violation_type}"
+        last_violation_time = self.violation_cooldown.get(cooldown_key, 0)
+        cooldown_period = self.violation_cooldown_time.get(violation_type, 1.0)
+        
+        if timestamp - last_violation_time < cooldown_period:
+            # Too soon! Skip this violation
+            logger.debug(f"Skipping {violation_type} for person {person_id} (cooldown)")
+            return
+        
+        # Update cooldown tracker
+        self.violation_cooldown[cooldown_key] = timestamp
         
         # Apply score decay before adding new violation
         self._apply_decay(person_id, timestamp)
@@ -90,12 +117,12 @@ class SuspicionScorer:
         if timestamp is None:
             timestamp = time.time()
         
-        # Apply decay
+        # Apply decay FIRST
         self._apply_decay(person_id, timestamp)
         
         # Add violations for detected behaviors
         
-        # Prohibited items
+        # Prohibited items (always add - these are serious)
         for item in behaviors.get('prohibited_items', []):
             if item == 'phone':
                 self.add_violation(person_id, 'phone_detected', timestamp)
@@ -104,7 +131,7 @@ class SuspicionScorer:
             elif item == 'paper':
                 self.add_violation(person_id, 'paper_detected', timestamp)
         
-        # Continuous violations
+        # Continuous violations (with cooldown protection)
         for violation in behaviors.get('continuous_violations', []):
             vtype = violation['type']
             
@@ -129,11 +156,13 @@ class SuspicionScorer:
                     {'duration': violation['duration']}
                 )
         
-        # Anomalies
-        if len(behaviors.get('anomalies', [])) > 0:
+        # Anomalies (LIMIT THESE - they were causing spam!)
+        anomaly_count = len(behaviors.get('anomalies', []))
+        if anomaly_count > 0:
+            # Only add once even if multiple anomalies detected
             self.add_violation(
                 person_id, 'desk_anomaly', timestamp,
-                {'count': len(behaviors['anomalies'])}
+                {'count': anomaly_count}
             )
         
         self.last_update[person_id] = timestamp
@@ -177,10 +206,17 @@ class SuspicionScorer:
         
         # Apply decay
         if self.scores[person_id] > self.min_score:
+            old_score = self.scores[person_id]
             self.scores[person_id] = max(
                 self.scores[person_id] - decay_amount,
                 self.min_score
             )
+            
+            # Log significant decay
+            if old_score - self.scores[person_id] > 5:
+                logger.debug(
+                    f"Person {person_id}: Score decayed {old_score:.1f} -> {self.scores[person_id]:.1f}"
+                )
     
     def _update_alert_status(self, person_id):
         """
@@ -289,6 +325,7 @@ class SuspicionScorer:
         self.scores[person_id] = self.min_score
         self.alert_status[person_id] = 'normal'
         self.violation_history[person_id] = []
+        self.violation_cooldown.clear()
         logger.info(f"Score reset for person {person_id}")
     
     def clear_all(self):
@@ -297,6 +334,7 @@ class SuspicionScorer:
         self.last_update.clear()
         self.violation_history.clear()
         self.alert_status.clear()
+        self.violation_cooldown.clear()
         logger.info("All scores cleared")
     
     def get_score_breakdown(self, person_id):
