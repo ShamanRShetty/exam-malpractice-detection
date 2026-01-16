@@ -1,1 +1,1 @@
-# exam-malpractice-detection
+# Exam-Malpractice-Detection
