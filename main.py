@@ -1,6 +1,6 @@
 """
 Main Application - Exam Malpractice Detection System - FIXED VERSION
-Complete integration of all modules with error handling
+With stable person tracking and smooth visualization
 """
 import cv2
 import time
@@ -13,6 +13,7 @@ from config.settings import *
 from utils.logger import get_logger
 from utils.video_utils import VideoCapture, FrameBuffer
 from utils.privacy import FaceBlurrer
+from utils.person_tracker import PersonTracker  # NEW: Stable tracker
 from src.detection.object_detector import ObjectDetector
 from src.detection.pose_detector import PoseDetector, MultiPersonPoseDetector
 from src.detection.anomaly_detector import AnomalyDetector
@@ -23,7 +24,7 @@ logger = get_logger(__name__, str(LOGS_DIR / 'main.log'))
 
 
 class ExamMalpracticeDetector:
-    """Main application class - FIXED"""
+    """Main application class - FIXED with stable tracking"""
     
     def __init__(self, camera_source=0):
         """
@@ -89,6 +90,13 @@ class ExamMalpracticeDetector:
         self.behavior_analyzer = BehaviorAnalyzer()
         self.suspicion_scorer = SuspicionScorer()
         
+        # NEW: Stable person tracker
+        self.person_tracker = PersonTracker(
+            max_disappeared=30,  # 1 second at 30fps
+            distance_threshold=120,  # pixels
+            smoothing_window=7  # smooth over 7 frames
+        )
+        
         # Privacy
         if PRIVACY_SETTINGS['enable_face_blur']:
             try:
@@ -105,10 +113,6 @@ class ExamMalpracticeDetector:
         self.baseline_set = False
         self.frame_count = 0
         self.start_time = None
-        
-        # Person tracking (simple version)
-        self.tracked_persons = {}
-        self.next_person_id = 1
         
         # Statistics
         self.stats = {
@@ -174,7 +178,7 @@ class ExamMalpracticeDetector:
             self.stop()
     
     def _main_loop(self, window_name):
-        """Main processing loop - FIXED"""
+        """Main processing loop - FIXED with stable tracking"""
         logger.info("Entering main processing loop...")
         
         fps_start_time = time.time()
@@ -202,9 +206,17 @@ class ExamMalpracticeDetector:
             
             # Skip frames for performance
             if self.frame_count % PERFORMANCE_SETTINGS['frame_skip'] != 0:
-                # Still display the frame
+                # Still display the frame with current tracking
                 display_frame = frame.copy()
-                self._draw_info_panel(display_frame)
+                
+                # Draw existing tracked persons
+                tracked = self.person_tracker.get_current_tracked()
+                for person_id, bbox in tracked.items():
+                    score = self.suspicion_scorer.get_score(person_id, loop_start)
+                    alert_status = self.suspicion_scorer.get_alert_status(person_id)
+                    self._draw_person_box(display_frame, person_id, bbox, score, alert_status)
+                
+                self._draw_info_panel(display_frame, len(tracked))
                 cv2.imshow(window_name, display_frame)
                 
                 key = cv2.waitKey(1) & 0xFF
@@ -268,7 +280,7 @@ class ExamMalpracticeDetector:
     
     def _process_frame(self, frame, timestamp):
         """
-        Process single frame - FIXED
+        Process single frame - FIXED with stable tracking
         
         Args:
             frame: Input frame
@@ -292,26 +304,31 @@ class ExamMalpracticeDetector:
             person_detections = []
         
         if len(person_detections) == 0:
+            # Update tracker with no detections
+            self.person_tracker.update([], timestamp)
             return results
         
-        # Detect poses for each person
+        # Extract bounding boxes
         person_bboxes = [det['bbox'] for det in person_detections]
+        
+        # Update tracker (this gives us stable IDs and smoothed boxes)
+        tracked_persons = self.person_tracker.update(person_bboxes, timestamp)
+        
+        # Detect poses for tracked persons
         try:
-            poses = self.pose_detector.detect(frame, person_bboxes)
+            smoothed_bboxes = list(tracked_persons.values())
+            poses = self.pose_detector.detect(frame, smoothed_bboxes)
         except Exception as e:
             logger.error(f"Pose detection failed: {e}")
             poses = []
         
-        # Match poses with persons
-        for i, person_det in enumerate(person_detections):
+        # Process each tracked person
+        for i, (person_id, bbox) in enumerate(tracked_persons.items()):
             try:
-                person_id = self._get_or_assign_person_id(person_det['bbox'])
-                
                 pose_data = poses[i] if i < len(poses) else None
                 
-                # Detect prohibited items near person
-                person_bbox = person_det['bbox']
-                x1, y1, x2, y2 = map(int, person_bbox)
+                # Detect prohibited items near person (use smoothed bbox)
+                x1, y1, x2, y2 = map(int, bbox)
                 
                 # Ensure valid crop region
                 x1, y1 = max(0, x1), max(0, y1)
@@ -338,7 +355,7 @@ class ExamMalpracticeDetector:
                 
                 # Prepare frame data
                 frame_data = {
-                    'detections': person_det,
+                    'detections': {'bbox': bbox},
                     'pose': pose_data,
                     'prohibited_items': prohibited_items,
                     'anomalies': anomalies
@@ -372,7 +389,7 @@ class ExamMalpracticeDetector:
                 
                 results['persons'].append({
                     'id': person_id,
-                    'bbox': person_bbox,
+                    'bbox': bbox,
                     'pose': pose_data,
                     'behaviors': behaviors,
                     'score': score,
@@ -397,105 +414,98 @@ class ExamMalpracticeDetector:
         
         return results
     
-    def _get_or_assign_person_id(self, bbox):
+    def _draw_person_box(self, frame, person_id, bbox, score, alert_status):
         """
-        Simple person tracking - assign ID based on bbox proximity
-        
-        Args:
-            bbox: Person bounding box
-        
-        Returns:
-            int: Person ID
+        Draw a single person's bounding box with label
+        Separated for reuse in skipped frames
         """
-        bbox_center = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
+        x1, y1, x2, y2 = map(int, bbox)
         
-        # Find closest tracked person
-        min_distance = float('inf')
-        closest_id = None
+        # Color based on alert status
+        if alert_status == 'critical':
+            color = (0, 0, 255)  # Red
+        elif alert_status == 'high':
+            color = (0, 165, 255)  # Orange
+        elif alert_status == 'medium':
+            color = (0, 255, 255)  # Yellow
+        else:
+            color = (0, 255, 0)  # Green
         
-        for person_id, tracked_bbox in self.tracked_persons.items():
-            tracked_center = [
-                (tracked_bbox[0] + tracked_bbox[2]) / 2,
-                (tracked_bbox[1] + tracked_bbox[3]) / 2
-            ]
-            distance = np.sqrt(
-                (bbox_center[0] - tracked_center[0]) ** 2 +
-                (bbox_center[1] - tracked_center[1]) ** 2
-            )
-            if distance < min_distance:
-                min_distance = distance
-                closest_id = person_id
+        # Draw bounding box with thicker lines for visibility
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
         
-        # If close enough, reuse ID
-        threshold = 100  # pixels
-        if closest_id is not None and min_distance < threshold:
-            self.tracked_persons[closest_id] = bbox
-            return closest_id
+        # Prepare label
+        label = f"ID:{person_id} Score:{score:.0f}"
+        if alert_status != 'normal':
+            label += f" [{alert_status.upper()}]"
         
-        # Assign new ID
-        new_id = self.next_person_id
-        self.next_person_id += 1
-        self.tracked_persons[new_id] = bbox
-        logger.info(f"New person detected: ID {new_id}")
-        return new_id
+        # Calculate label background size
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        font_thickness = 2
+        (text_width, text_height), baseline = cv2.getTextSize(
+            label, font, font_scale, font_thickness
+        )
+        
+        # Draw label background (solid, not transparent)
+        label_y = max(y1 - 10, text_height + 10)
+        cv2.rectangle(
+            frame,
+            (x1, label_y - text_height - 5),
+            (x1 + text_width + 10, label_y + 5),
+            color,
+            -1
+        )
+        
+        # Draw label text
+        cv2.putText(
+            frame, label, (x1 + 5, label_y),
+            font, font_scale, (255, 255, 255), font_thickness
+        )
     
     def _draw_visualization(self, frame, results):
-        """Draw visualization overlays"""
+        """Draw visualization overlays with stable boxes"""
         display = frame.copy()
         
         # Draw persons with scores
         for person in results['persons']:
             bbox = person['bbox']
-            x1, y1, x2, y2 = map(int, bbox)
-            
-            # Color based on alert status
-            alert_status = person['alert_status']
-            if alert_status == 'critical':
-                color = (0, 0, 255)  # Red
-            elif alert_status == 'high':
-                color = (0, 165, 255)  # Orange
-            elif alert_status == 'medium':
-                color = (0, 255, 255)  # Yellow
-            else:
-                color = (0, 255, 0)  # Green
-            
-            # Draw bounding box
-            cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
-            
-            # Draw label
+            person_id = person['id']
             score = person['score']
-            label = f"ID:{person['id']} Score:{score:.1f}"
+            alert_status = person['alert_status']
             
-            # Add status indicator
-            if alert_status != 'normal':
-                label += f" [{alert_status.upper()}]"
+            # Draw main box
+            self._draw_person_box(display, person_id, bbox, score, alert_status)
             
-            cv2.putText(
-                display, label, (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2
-            )
-            
-            # Draw prohibited items warning
+            # Draw prohibited items warning (below the box)
+            x1, y1, x2, y2 = map(int, bbox)
             prohibited = person['prohibited_items']
+            warning_y = y2 + 25
+            
             if prohibited['phones']:
                 cv2.putText(
-                    display, "PHONE DETECTED!", (x1, y2 + 20),
+                    display, "! PHONE DETECTED !", (x1, warning_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2
                 )
+                warning_y += 25
+            
             if prohibited['books']:
                 cv2.putText(
-                    display, "BOOK DETECTED!", (x1, y2 + 40),
+                    display, "! BOOK DETECTED !", (x1, warning_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2
                 )
         
         # Draw info panel
-        self._draw_info_panel(display)
+        self._draw_info_panel(display, len(results['persons']))
         
         return display
     
-    def _draw_info_panel(self, frame):
+    def _draw_info_panel(self, frame, num_tracked=None):
         """Draw information panel on frame"""
         h, w = frame.shape[:2]
+        
+        if num_tracked is None:
+            num_tracked = len(self.person_tracker.get_current_tracked())
         
         # Semi-transparent overlay
         overlay = frame.copy()
@@ -511,7 +521,7 @@ class ExamMalpracticeDetector:
             f"Status: {status_text}",
             f"FPS: {self.stats['fps']} | Process: {self.stats['processing_time']*1000:.0f}ms",
             f"Frames: {self.stats['total_frames']} | Detected: {self.stats['total_detections']}",
-            f"Tracked Persons: {len(self.tracked_persons)}",
+            f"Tracked Persons: {num_tracked}",
             f"Baseline: {'SET' if self.baseline_set else 'NOT SET'}",
             "",
             "Controls:",
@@ -523,7 +533,7 @@ class ExamMalpracticeDetector:
             color = status_color if i == 0 else (255, 255, 255)
             cv2.putText(
                 frame, line, (20, y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA
             )
             y += 20
     
@@ -545,8 +555,7 @@ class ExamMalpracticeDetector:
         try:
             self.behavior_analyzer = BehaviorAnalyzer()
             self.suspicion_scorer = SuspicionScorer()
-            self.tracked_persons.clear()
-            self.next_person_id = 1
+            self.person_tracker.clear()
             self.stats = {
                 'total_frames': 0,
                 'total_detections': 0,
@@ -573,10 +582,11 @@ class ExamMalpracticeDetector:
     def _print_stats(self):
         """Print system statistics"""
         uptime = time.time() - self.start_time if self.start_time else 0
+        num_tracked = len(self.person_tracker.get_current_tracked())
         logger.info(
             f"Stats - FPS: {self.stats['fps']}, "
             f"Frames: {self.stats['total_frames']}, "
-            f"Tracked: {len(self.tracked_persons)}, "
+            f"Tracked: {num_tracked}, "
             f"Uptime: {uptime:.1f}s"
         )
     
