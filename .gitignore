@@ -17,6 +17,7 @@ __pycache__/
 data/logs/
 data/snapshots/
 data/evidence_clips/
+data/baseline_frames/
 
 # IDE settings
 .vscode/
